@@ -700,11 +700,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         boolean showClear = getResources().getBoolean(R.bool.clear_memory_button);
         btnClear.setVisibility(showClear ? View.VISIBLE : View.GONE);
         if (showClear) btnClear.setOnClickListener(v -> clearMemory());
-        btnWifi.setOnClickListener(v -> openNetworkPill());
-        btnWifi.setOnLongClickListener(v -> {
-            open(systemIntent(Settings.ACTION_WIFI_SETTINGS));
-            return true;
-        });
+        btnWifi.setFocusable(true);
+        btnWifi.setClickable(true);
+        // Open the Wi-Fi page after this OK press ends, so the press does not also flip the on/off switch.
+        btnWifi.setOnClickListener(v -> v.postDelayed(
+                () -> open(systemIntent(Settings.ACTION_WIFI_SETTINGS)), 200));
         launcherSettingsButton = cfg.launcherSettingsButton;
         if (launcherSettingsButton) {
             ((TextView) btnSettings).setText(R.string.launcher_settings);
@@ -762,6 +762,8 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             else makeIconOnly(btnWifi);
             makeIconOnly((TextView) btnSettings);
         }
+        makeIconOnly(btnWifi);
+        wifiIconOnly = true;
         if (cfg.iconOnlyInputs) makeIconOnly((TextView) btnInputs);
         btnSettings.setOnLongClickListener(v -> {
             showSettingsMenu();
@@ -2294,7 +2296,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         ViewGroup bar = findViewById(R.id.topButtons);
         for (int i = 0; i < bar.getChildCount(); i++) {
             View button = bar.getChildAt(i);
-            if (button != btnInputs && button.getVisibility() == View.VISIBLE) return button;
+            if (button != btnInputs && button.getVisibility() == View.VISIBLE && button.isFocusable()) return button;
         }
         return findViewById(R.id.btnSettings);
     }
@@ -2638,6 +2640,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         } catch (Exception ignored) {
         }
+        String status = text;
         // With a VPN app configured, a VPN that is down matters too: show a red "VPN off" capsule then.
         boolean vpnDown = !vpn && online && !vpnApp.isEmpty();
         if (vpn || vpnDown) {
@@ -2669,8 +2672,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             btnWifi.setText(text);
         }
         if (wifiIconOnly) {
-            btnWifi.setContentDescription(btnWifi.getText());
-            btnWifi.setText(null);
+            btnWifi.setContentDescription(status);
+            if (!wifiNameShown && isWifiName(status)) {
+                wifiNameShown = true;
+                showWifiNameBriefly(status);
+            } else if (!wifiNameVisible) {
+                btnWifi.setText(null);
+            }
         }
         if (festive && diya != null) {
             if (online && flame == 0) flame = 3;   // online some other way (cellular, USB tethering)
@@ -2699,6 +2707,15 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private boolean launcherSettingsButton;
     /** icon_only_buttons without wifi_label_width: the Wi-Fi pill shows no network name. */
     private boolean wifiIconOnly;
+    /** The network name is shown once, the first time this process learns it. */
+    private boolean wifiNameShown;
+    private boolean wifiNameVisible;
+    private final Runnable hideWifiName = () -> {
+        wifiNameVisible = false;
+        if (isDestroyed()) return;
+        makeIconOnly(btnWifi);
+        btnWifi.requestLayout();
+    };
     /** config.xml wifi_status_color: the Wi-Fi icon's green while online and its usual pill colours; null while off. */
     private ColorStateList wifiOnlineTint, wifiPlainTint;
     /** wifi_status_warnings (with wifi_status_color): orange without internet, red offline; null while off. */
@@ -2707,6 +2724,24 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     private View btnLibraryTop;
     /** The open library came from that button: closing it returns there instead of scrolling to the grid's end. */
     private boolean libraryFromTopBar;
+
+    /** The network name beside the icon, then the icon alone. Not the placeholder or the offline word. */
+    private boolean isWifiName(String text) {
+        return !text.equals(getString(R.string.wifi)) && !text.equals(getString(R.string.offline)) && !text.isEmpty();
+    }
+
+    private void showWifiNameBriefly(String name) {
+        ViewGroup.LayoutParams lp = btnWifi.getLayoutParams();
+        lp.width = ViewGroup.LayoutParams.WRAP_CONTENT;
+        btnWifi.setLayoutParams(lp);
+        btnWifi.setMaxWidth(Math.round(180 * density));
+        btnWifi.setPaddingRelative(Math.round(16 * density), 0, Math.round(20 * density), 0);
+        btnWifi.setCompoundDrawablePadding(Math.round(9 * density));
+        btnWifi.setText(name);
+        wifiNameVisible = true;
+        btnWifi.removeCallbacks(hideWifiName);
+        btnWifi.postDelayed(hideWifiName, 2500);
+    }
 
     /** Turns a labelled top pill into the round TopButtonIcon shape: no text, the icon centred by even padding. */
     private void makeIconOnly(TextView pill) {
@@ -2781,13 +2816,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 if (self.equals(info.packageName)) continue;
                 am.killBackgroundProcesses(info.packageName);
             }
+            try {
+                Thread.sleep(700);
+            } catch (InterruptedException ignored) {
+                Thread.currentThread().interrupt();
+            }
             ActivityManager.MemoryInfo after = new ActivityManager.MemoryInfo();
             am.getMemoryInfo(after);
-            long freed = Math.max(0, after.availMem - before.availMem) / (1024 * 1024);
+            float freedMb = Math.max(0, after.availMem - before.availMem) / 1048576f;
+            float freeMb = after.availMem / 1048576f;
+            float totalMb = after.totalMem / 1048576f;
             runOnUiThread(() -> {
                 if (isDestroyed()) return;
-                Toast.makeText(this, freed > 0 ? getString(R.string.memory_freed, freed)
-                        : getString(R.string.memory_cleared), Toast.LENGTH_SHORT).show();
+                Toast.makeText(this, getString(R.string.memory_freed, freedMb, freedMb / 1024f, freeMb, totalMb),
+                        Toast.LENGTH_LONG).show();
             });
         }).start();
     }
